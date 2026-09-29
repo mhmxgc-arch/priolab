@@ -7,7 +7,7 @@ type Rule = { address: string; created_at: number };
 type Settings = { users: User[]; ipRules: Rule[]; ipEnforced: boolean; currentIp: string | null };
 
 export default function Home() {
-  const [version, setVersion] = useState("2.0.1");
+  const [version, setVersion] = useState("2.0.2");
   const [setup, setSetup] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);

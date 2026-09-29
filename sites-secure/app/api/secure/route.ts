@@ -34,7 +34,7 @@ async function createSession(userId: string) {
   return token;
 }
 function publicUser(user: { id: string; username: string; role: string; status: string }) { return { id: user.id, username: user.username, role: user.role, status: user.status }; }
-function reportRow(row: Record<string, unknown>) { return { id: row.id, description: row.description, taxYear: String(row.tax_year), period: String(row.tax_year), from: row.from_month, to: row.to_month, filename: row.filename, rows: JSON.parse(String(row.rows_json)) }; }
+function reportRow(row: Record<string, unknown>) { return { id: row.id, description: row.description, taxYear: String(row.tax_year), period: String(row.tax_year), from: row.created_by === "system-migration" ? null : row.from_month, to: row.created_by === "system-migration" ? null : row.to_month, filename: row.filename, rows: JSON.parse(String(row.rows_json)) }; }
 
 export async function GET(request: Request) {
   try {
