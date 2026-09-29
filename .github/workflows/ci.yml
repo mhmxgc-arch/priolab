@@ -1,0 +1,75 @@
+# CI: every push and pull request is checked here; a green run means the site
+# builds into the same image APP-01 runs and that image boots healthy.
+# Deployment is NOT done from GitHub -- APP-01 polls this repository every
+# minute and rebuilds whatever lands on main (see DEPLOY.md). A red run here is
+# the early warning; the deployer's own health gate is what keeps a broken
+# build off the live site.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: javascript syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: node --check on every script that is not minified
+        run: |
+          find . -path ./node_modules -prune -o -path ./.git -prune -o \
+               \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) ! -name '*.min.js' -print |
+            while read -r f; do echo "$f"; node --check "$f" || exit 1; done
+
+  image:
+    # Same commands the deployer runs on APP-01, so a Dockerfile or compose
+    # file that breaks is caught here before it reaches a deploy. Then waits
+    # for every container that declares a healthcheck to report healthy --
+    # which covers a login backend or a database added later with no change
+    # to this file.
+    name: docker image builds and boots
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - name: env and host paths the stack expects
+        run: |
+          cp .env.example .env
+          # Throwaway values for any secret the compose file demands; the real
+          # ones live only in .env on APP-01.
+          for k in $(grep -oE '\$\{[A-Z0-9_]+:\?' compose.yaml | tr -d '${:?' | sort -u); do
+            grep -q "^$k=" .env || echo "$k=ci-$(openssl rand -hex 16)" >> .env
+          done
+          for d in $(grep -oE '/srv/priolab[^:" ]*' compose.yaml | sort -u); do
+            sudo mkdir -p "$d" && sudo chmod 0777 "$d"
+          done
+      - run: docker network create edge
+      - run: docker compose --project-name priolab build --pull
+      - name: boot and wait for healthy
+        run: |
+          docker compose --project-name priolab up -d
+          for i in $(seq 1 40); do
+            bad=0; wait=0
+            for c in $(docker compose --project-name priolab ps -aq); do
+              s=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}/{{.State.ExitCode}}{{end}}' "$c")
+              case "$s" in
+                healthy|running/0|exited/0) ;;
+                unhealthy|exited/*|dead/*) bad=1 ;;
+                *) wait=1 ;;
+              esac
+            done
+            [ $bad = 1 ] || [ $wait = 0 ] && break
+            sleep 3
+          done
+          docker compose --project-name priolab ps -a
+          docker compose --project-name priolab logs --tail 80
+          [ $bad = 0 ] && [ $wait = 0 ]
