@@ -1,0 +1,58 @@
+# Priolab behind Traefik on APP-01, served at https://priolab.xprsit.net.
+#
+# One container, no database and no volumes: the app is static and processes
+# every uploaded report in the browser, so there is nothing on the server to
+# keep or back up.
+#
+# The platform deployer runs this file as-is every time main moves:
+#   docker compose --project-name priolab build --pull && up -d
+# then reads the healthcheck below to decide whether the deploy stays or is
+# rolled back to the previous image.
+services:
+  app:
+    build:
+      context: .
+    # ${PROJECT}:latest normally; the deployer also names every build
+    # ${PROJECT}:sha-<commit>, so an operator can pin an older one with
+    #   IMAGE_TAG=sha-a1b2c3d docker compose --project-name priolab up -d
+    image: priolab:${IMAGE_TAG:-latest}
+    container_name: priolab
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Jerusalem}
+    networks:
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.priolab.rule=Host(`${PUBLIC_HOST:-priolab.xprsit.net}`)
+      - traefik.http.routers.priolab.entrypoints=websecure
+      # No certresolver here: priolab.xprsit.net is covered by the platform's
+      # *.xprsit.net wildcard, which every websecure router inherits.
+      - traefik.http.routers.priolab.middlewares=security-headers@file
+      - traefik.http.services.priolab.loadbalancer.server.port=8080
+      - traefik.docker.network=edge
+    mem_limit: 64m
+    healthcheck:
+      # Must genuinely pass: Traefik drops the router on a failing healthcheck,
+      # and the deployer's gate rolls a deploy back on `unhealthy`.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  edge:
+    external: true
