@@ -7,14 +7,13 @@ type Rule = { address: string; created_at: number };
 type Settings = { users: User[]; ipRules: Rule[]; ipEnforced: boolean; currentIp: string | null };
 
 export default function Home() {
-  const [version, setVersion] = useState("2.0.0");
+  const [version, setVersion] = useState("2.0.1");
   const [setup, setSetup] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [view, setView] = useState<"reports" | "settings">("reports");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [bootstrapToken, setBootstrapToken] = useState("");
   const [otp, setOtp] = useState("");
   const [enrollment, setEnrollment] = useState<{ secret: string; uri: string } | null>(null);
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "viewer" });
@@ -47,7 +46,7 @@ export default function Home() {
   async function submitLogin(event: FormEvent) {
     event.preventDefault(); setBusy(true); setNotice("");
     try {
-      const result = await post(setup ? "bootstrap" : enrollment ? "enroll" : "login", { username, password, otp, bootstrapToken });
+      const result = await post(setup ? "bootstrap" : enrollment ? "enroll" : "login", { username, password, otp });
       if (result.enroll) { setEnrollment({ secret: result.secret, uri: result.uri }); setSetup(false); setOtp(""); }
       else { setUser(result.user); setEnrollment(null); setPassword(""); setOtp(""); }
     } catch (error) { setNotice((error as Error).message); }
@@ -60,7 +59,6 @@ export default function Home() {
     <form onSubmit={submitLogin} className="stack">
       <label>שם משתמש<input autoComplete="username" required value={username} onChange={e => setUsername(e.target.value)} /></label>
       <label>סיסמה<input type="password" autoComplete={setup ? "new-password" : "current-password"} required minLength={setup ? 12 : undefined} value={password} onChange={e => setPassword(e.target.value)} /></label>
-      {setup && <label>קוד הקמה<input type="password" required value={bootstrapToken} onChange={e => setBootstrapToken(e.target.value)} /></label>}
       {enrollment && <div className="enroll"><strong>חיבור Google Authenticator</strong><p>פתחו את האפליקציה, בחרו הוספת חשבון והזינו את מפתח ההגדרה:</p><code dir="ltr">{enrollment.secret}</code><p className="muted">לאחר מכן הזינו את הקוד בן שש הספרות. שמרו את המפתח במקום בטוח.</p></div>}
       {!setup && <label>קוד Google Authenticator<input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" placeholder="000000" required={!enrollment} value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ""))} /></label>}
       {notice && <div className="notice" role="alert">{notice}</div>}

@@ -1,4 +1,4 @@
-import { database, encryptionKey, bootstrapToken, clientIp, json, error, sessionCookie, sessionUser, ipAllowed, validOrigin, type UserRow } from "@/lib/server";
+import { database, encryptionKey, clientIp, json, error, sessionCookie, sessionUser, ipAllowed, validOrigin, type UserRow } from "@/lib/server";
 import { constantEqual, decryptTotp, encryptTotp, newTotpSecret, passwordHash, randomHex, sha256, totpUri, verifyTotp } from "@/lib/security";
 import { APP_VERSION } from "@/lib/version";
 
@@ -74,7 +74,6 @@ export async function POST(request: Request) {
     if (action === "bootstrap") {
       const count = await database().prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
       if (count?.total || !secureHeaders(request)) return error("הגדרת מנהל אינה זמינה", 403);
-      if (!constantEqual(String(body.bootstrapToken || ""), bootstrapToken())) return error("קוד ההקמה שגוי", 403);
       const username = usernameOf(body.username);
       if (!validUsername(username) || !validPassword(body.password)) return error("נדרש שם משתמש תקין וסיסמה בת 12 תווים לפחות");
       const salt = randomHex(16), secret = newTotpSecret(), id = crypto.randomUUID();

@@ -14,11 +14,6 @@ export function encryptionKey(): string {
   if (!key) throw new Error("Encryption key is unavailable");
   return key;
 }
-export function bootstrapToken(): string {
-  const token = (env as unknown as { BOOTSTRAP_TOKEN?: string }).BOOTSTRAP_TOKEN;
-  if (!token) throw new Error("Bootstrap token is unavailable");
-  return token;
-}
 export function clientIp(request: Request): string | null {
   return request.headers.get("cf-connecting-ip")?.trim().toLowerCase() || null;
 }
