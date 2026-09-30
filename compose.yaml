@@ -1,8 +1,10 @@
-# Priolab behind Traefik on APP-01, served at https://priolab.xprsit.net.
+# Priolab v2 behind Traefik on APP-01, served at https://priolab.xprsit.net.
 #
-# One container, no database and no volumes: the app is static and processes
-# every uploaded report in the browser, so there is nothing on the server to
-# keep or back up.
+# One container: the Next.js server from sites-secure/, with its database in a
+# single SQLite file under /srv/priolab/data on the host -- never in the image
+# or a nameless volume. APP_ENCRYPTION_KEY in .env encrypts every user's TOTP
+# secret; losing it means every user has to be re-enrolled. Its copy is in
+# C:\DEV\_SECRETS\priolab.env.
 #
 # The platform deployer runs this file as-is every time main moves:
 #   docker compose --project-name priolab build --pull && up -d
@@ -20,6 +22,17 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Jerusalem}
+      # 32 random bytes, base64. Without it `compose build`/`up` refuse to run,
+      # so a missing .env keeps the running version live instead of starting a
+      # site that cannot create users.
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?set APP_ENCRYPTION_KEY in .env (openssl rand -base64 32)}
+      # What the browser's Origin header must equal on every POST.
+      PUBLIC_ORIGIN: https://${PUBLIC_HOST:-priolab.xprsit.net}
+    volumes:
+      - /srv/priolab/data:/data:rw
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
     networks:
       - edge
     read_only: true
@@ -35,23 +48,52 @@ services:
       - traefik.http.routers.priolab.entrypoints=websecure
       # No certresolver here: priolab.xprsit.net is covered by the platform's
       # *.xprsit.net wildcard, which every websecure router inherits.
-      - traefik.http.routers.priolab.middlewares=security-headers@file
-      - traefik.http.services.priolab.loadbalancer.server.port=8080
+      - traefik.http.routers.priolab.middlewares=security-headers@file,priolab-trust
+      # On Sites these headers come from the platform in front of the app: the
+      # authenticated owner (which alone may create the first admin) and the
+      # client IP (which the IP allowlist checks). Here nothing vouches for
+      # them, so any value a client sends is removed before it reaches the app.
+      # The first admin is created from APP-01 itself, straight to the
+      # container (see DEPLOY.md); the client IP comes from Traefik's X-Real-Ip.
+      - traefik.http.middlewares.priolab-trust.headers.customrequestheaders.oai-authenticated-user-id=
+      - traefik.http.middlewares.priolab-trust.headers.customrequestheaders.oai-authenticated-user-email=
+      - traefik.http.middlewares.priolab-trust.headers.customrequestheaders.oai-authenticated-user-full-name=
+      - traefik.http.middlewares.priolab-trust.headers.customrequestheaders.oai-authenticated-user-full-name-encoding=
+      - traefik.http.middlewares.priolab-trust.headers.customrequestheaders.cf-connecting-ip=
+      - traefik.http.services.priolab.loadbalancer.server.port=3000
       - traefik.docker.network=edge
-    mem_limit: 64m
+    mem_limit: 512m
     healthcheck:
-      # Must genuinely pass: Traefik drops the router on a failing healthcheck,
+      # The status call opens the database, so healthy means the app AND its
+      # data are reachable. Traefik drops the router on a failing healthcheck,
       # and the deployer's gate rolls a deploy back on `unhealthy`.
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "node", "-e",
+             "fetch('http://127.0.0.1:3000/api/secure?action=status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 5s
+      start_period: 20s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  storage-init:
+    # Exits 0 on every `up -d` -- a finished one-shot, not a container down.
+    image: alpine:3.22
+    container_name: priolab-storage-init
+    restart: "no"
+    command: ["sh", "-c", "mkdir -p /data && chown 10004:10004 /data && chmod 0700 /data"]
+    volumes:
+      - /srv/priolab/data:/data:rw
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
 
 networks:
   edge:

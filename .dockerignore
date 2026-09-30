@@ -1,3 +1,4 @@
 .git
 .env
-*.md
+**/node_modules
+**/.next

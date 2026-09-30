@@ -47,7 +47,8 @@ jobs:
           # Throwaway values for any secret the compose file demands; the real
           # ones live only in .env on APP-01.
           for k in $(grep -oE '\$\{[A-Z0-9_]+:\?' compose.yaml | tr -d '${:?' | sort -u); do
-            grep -q "^$k=" .env || echo "$k=ci-$(openssl rand -hex 16)" >> .env
+            sed -i "/^$k=$/d" .env
+            grep -q "^$k=" .env || echo "$k=$(openssl rand -base64 32)" >> .env
           done
           for d in $(grep -oE '/srv/priolab[^:" ]*' compose.yaml | sort -u); do
             sudo mkdir -p "$d" && sudo chmod 0777 "$d"
