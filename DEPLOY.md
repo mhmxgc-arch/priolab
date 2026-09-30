@@ -32,13 +32,21 @@ TOTP.
 
 ## First admin
 
-On Sites the platform-authenticated owner creates the first admin. Here Traefik
-strips those headers from every request, so it is done from APP-01, straight to
-the container, and only while the database has no users:
+On Sites the platform-authenticated owner creates the first admin. On APP-01,
+Traefik strips those headers from every request. After the container starts,
+open an interactive SSH shell on APP-01 and run the following commands there.
+The password is read without echoing it or putting it in a command argument.
+The command succeeds only when the database has no users:
 
 ```sh
-ssh app-01 'docker exec priolab node -e "fetch(\"http://127.0.0.1:3000/api/secure\",{method:\"POST\",headers:{\"content-type\":\"application/json\",origin:\"https://priolab.xprsit.net\",\"oai-authenticated-user-id\":\"owner\"},body:JSON.stringify({action:\"bootstrap\",username:\"admin\",password:process.argv[1]})}).then(r=>r.text()).then(console.log)" "<password, 12+ chars>"'
+read -rsp 'Temporary admin password: ' PRIOLAB_ADMIN_PASSWORD
+printf '\n'
+printf '%s' "$PRIOLAB_ADMIN_PASSWORD" | docker exec -i priolab node /app/bootstrap-admin.mjs
+unset PRIOLAB_ADMIN_PASSWORD
 ```
 
-Then open the site, log in as `admin` with that password, and scan the QR code
-with Google Authenticator. Further users are created from the admin screen.
+Then open the site and log in as `admin` with the temporary password. The first
+login requires a different complex password (8 or more characters, with an
+uppercase letter, lowercase letter, digit and symbol). Add the displayed
+setup key in Google Authenticator and enter its six-digit code to finish.
+Further users are created from the admin screen.

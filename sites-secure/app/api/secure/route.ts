@@ -44,7 +44,8 @@ export async function GET(request: Request) {
     if (action === "status") {
       const count = await database().prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
       const user = await sessionUser(request);
-      return json({ version: APP_VERSION, setup: count?.total === 0, authenticated: !!user, user: user ? publicUser(user) : null });
+      const needsSetup = count?.total === 0;
+      return json({ version: APP_VERSION, setup: needsSetup && !!secureHeaders(request), setupUnavailable: needsSetup && !secureHeaders(request), authenticated: !!user, user: user ? publicUser(user) : null });
     }
     const user = await sessionUser(request);
     if (!user) return error("נדרש אימות", 401);
@@ -103,6 +104,7 @@ export async function POST(request: Request) {
       const secret = await decryptTotp(user.totp_secret, encryptionKey());
       if (user.status === "pending" && action === "login") return json({ enroll: true, secret, uri: totpUri(username, secret) });
       if ((user.status === "pending") !== (action === "enroll")) return error("שלב האימות אינו תקין", 400);
+      if (action === "login" && !body.otp) return json({ otpRequired: true });
       const step = await verifyTotp(secret, String(body.otp || ""), user.last_totp_step);
       if (step === null) { await failed(result.key); return error("קוד האימות שגוי", 401); }
       const updated = await database().prepare("UPDATE users SET last_totp_step = ?, status = 'active' WHERE id = ? AND last_totp_step < ? AND status = ?").bind(step, user.id, step, user.status).run();

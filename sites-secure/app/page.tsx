@@ -7,8 +7,9 @@ type Rule = { address: string; created_at: number };
 type Settings = { users: User[]; ipRules: Rule[]; ipEnforced: boolean; currentIp: string | null };
 
 export default function Home() {
-  const [version, setVersion] = useState("2.1.0");
+  const [version, setVersion] = useState("2.1.1");
   const [setup, setSetup] = useState(false);
+  const [setupUnavailable, setSetupUnavailable] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [view, setView] = useState<"reports" | "settings">("reports");
@@ -18,6 +19,7 @@ export default function Home() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [otp, setOtp] = useState("");
+  const [otpRequired, setOtpRequired] = useState(false);
   const [enrollment, setEnrollment] = useState<{ secret: string; uri: string } | null>(null);
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "viewer" });
   const [address, setAddress] = useState("");
@@ -38,7 +40,7 @@ export default function Home() {
     return data;
   }, []);
   const refreshSettings = useCallback(async () => setSettings(await get("settings")), [get]);
-  useEffect(() => { get("status").then(data => { setVersion(data.version); setSetup(data.setup); setUser(data.user); }).catch((error: Error) => setNotice(error.message)).finally(() => setLoading(false)); }, [get]);
+  useEffect(() => { get("status").then(data => { setVersion(data.version); setSetup(data.setup); setSetupUnavailable(!!data.setupUnavailable); setUser(data.user); }).catch((error: Error) => setNotice(error.message)).finally(() => setLoading(false)); }, [get]);
   useEffect(() => { if (view === "settings" && user?.role === "admin") refreshSettings().catch((error: Error) => setNotice(error.message)); }, [view, user, refreshSettings]);
   async function act(action: string, values: Record<string, unknown>, message = "השינויים נשמרו") {
     setBusy(true); setNotice("");
@@ -51,25 +53,27 @@ export default function Home() {
     try {
       if (changeRequired && newPassword !== confirmPassword) throw new Error("אימות הסיסמה החדשה אינו תואם");
       const result = await post(setup ? "bootstrap" : changeRequired ? "password.change" : enrollment ? "enroll" : "login", { username, password, otp, ...(changeRequired ? { newPassword } : {}) });
-      if (result.changeRequired) { setSetup(false); setChangeRequired(true); setOtp(""); }
+      if (result.changeRequired) { setSetup(false); setChangeRequired(true); setOtpRequired(false); setOtp(""); }
       else if (result.enroll) { setEnrollment({ secret: result.secret, uri: result.uri }); setChangeRequired(false); setPassword(newPassword || password); setNewPassword(""); setConfirmPassword(""); setOtp(""); }
-      else { setUser(result.user); setEnrollment(null); setPassword(""); setOtp(""); }
+      else if (result.otpRequired) setOtpRequired(true);
+      else { setUser(result.user); setEnrollment(null); setPassword(""); setOtpRequired(false); setOtp(""); }
     } catch (error) { setNotice((error as Error).message); }
     finally { setBusy(false); }
   }
-  async function logout() { try { await post("logout"); setUser(null); setSettings(null); setView("reports"); setEnrollment(null); setChangeRequired(false); } catch (error) { setNotice((error as Error).message); } }
+  async function logout() { try { await post("logout"); setUser(null); setSettings(null); setView("reports"); setEnrollment(null); setChangeRequired(false); setOtpRequired(false); } catch (error) { setNotice((error as Error).message); } }
   if (loading) return <main className="auth-shell"><div className="auth-card">טוען…</div></main>;
   if (!user) return <main className="auth-shell"><div className="auth-card">
     <img className="login-logo" src="/xpress.png" alt="Xpress Technologies" /><p className="eyebrow">PRIO LAB · XPRESS TECHNOLOGIES</p><h1>מרכז ניתוח פיננסי</h1><p className="muted">גישה מאובטחת לדוחות רווח והפסד</p>
+    {setupUnavailable ? <div className="notice" role="alert">מנהל ראשוני טרם הוגדר. מפעיל השרת צריך להקים אותו מתוך השרת, ואז ניתן יהיה להיכנס כאן.</div> :
     <form onSubmit={submitLogin} className="stack">
       <label>שם משתמש<input autoComplete="username" required value={username} onChange={e => setUsername(e.target.value)} /></label>
       <label>{changeRequired ? "סיסמה ראשונית" : "סיסמה"}<input type="password" autoComplete={setup ? "new-password" : "current-password"} required minLength={setup ? 8 : undefined} value={password} onChange={e => setPassword(e.target.value)} /></label>
       {changeRequired && <div className="password-change"><strong>יש להחליף סיסמה לפני הכניסה</strong><p>לפחות 8 תווים, כולל אות גדולה, אות קטנה, ספרה וסימן מיוחד. לאחר מכן תחבר את Google Authenticator.</p><label>סיסמה חדשה<input type="password" autoComplete="new-password" minLength={8} required value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label><label>אימות סיסמה חדשה<input type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label></div>}
       {enrollment && <div className="enroll"><strong>חיבור Google Authenticator</strong><p>פתחו את האפליקציה, בחרו הוספת חשבון והזינו את מפתח ההגדרה:</p><code dir="ltr">{enrollment.secret}</code><p className="muted">לאחר מכן הזינו את הקוד בן שש הספרות. שמרו את המפתח במקום בטוח.</p></div>}
-      {!setup && !changeRequired && <label>קוד Google Authenticator<input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" placeholder="000000" required value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ""))} /></label>}
+      {!setup && !changeRequired && (otpRequired || enrollment) && <label>קוד Google Authenticator<input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" placeholder="000000" required value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ""))} /></label>}
       {notice && <div className="notice" role="alert">{notice}</div>}
       <button disabled={busy} className="primary">{busy ? "מאמת…" : setup ? "יצירת מנהל ראשי" : changeRequired ? "החלפת סיסמה והמשך" : enrollment ? "סיום הגדרה וכניסה" : "כניסה למערכת"}</button>
-    </form><footer>גרסה {version} · גישה למורשים בלבד</footer>
+    </form>}<footer>גרסה {version} · גישה למורשים בלבד</footer>
   </div></main>;
   return <main className="app-shell"><header className="topbar"><div className="topbrand"><img className="header-logo" src="/xpress.png" alt="Xpress Technologies" /><span><b>Priolab</b><small>מערכת ניתוח פיננסי</small></span></div><nav><button className={view === "reports" ? "selected" : ""} onClick={() => setView("reports")}>דוחות וניתוח</button>{user.role === "admin" && <button className={view === "settings" ? "selected" : ""} onClick={() => setView("settings")}>הגדרות ואבטחה</button>}</nav><div className="account"><span>{user.username} · {user.role === "admin" ? "מנהל" : user.role === "editor" ? "עורך" : "צופה"}</span><button onClick={logout}>יציאה</button></div></header>
     {view === "reports" ? <iframe title="דוחות וניתוח פיננסי" className="report-frame" src="/dashboard.html" /> : <section className="settings-page"><div className="settings-head"><p className="eyebrow">ADMINISTRATION</p><h1>הגדרות ואבטחה</h1><p>ניהול משתמשים, אימות דו־שלבי וכתובות מורשות</p></div>{notice && <div className="notice" role="status">{notice}</div>}{settings && <div className="settings-grid">

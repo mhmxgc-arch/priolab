@@ -31,6 +31,7 @@ COPY --from=build /src/sites-secure/.next/standalone ./
 COPY --from=build /src/sites-secure/.next/static ./.next/static
 COPY --from=build /src/sites-secure/public ./public
 COPY --from=build /src/sites-secure/drizzle ./drizzle
+COPY --from=build /src/deploy/v2/bootstrap-admin.mjs ./bootstrap-admin.mjs
 USER 10004:10004
 EXPOSE 3000
 CMD ["node", "server.js"]
