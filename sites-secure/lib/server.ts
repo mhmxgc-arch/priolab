@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { sha256 } from "./security";
 
-export type UserRow = { id: string; username: string; salt: string; password_hash: string; totp_secret: string; last_totp_step: number; role: "admin" | "editor" | "viewer"; status: "pending" | "active" | "disabled"; created_at: number };
+export type UserRow = { id: string; username: string; salt: string; password_hash: string; totp_secret: string; last_totp_step: number; role: "admin" | "editor" | "viewer"; status: "pending" | "active" | "disabled"; must_change_password: number; created_at: number };
 export type SessionUser = Pick<UserRow, "id" | "username" | "role" | "status">;
 
 export function database(): D1Database {
@@ -38,7 +38,7 @@ export async function sessionUser(request: Request): Promise<SessionUser | null>
   const token = request.headers.get("cookie")?.match(/(?:^|;\s*)priolab_session=([a-f0-9]{64})(?:;|$)/)?.[1];
   if (!token) return null;
   const hash = await sha256(token);
-  return database().prepare("SELECT u.id, u.username, u.role, u.status FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active'").bind(hash, Date.now()).first<SessionUser>();
+  return database().prepare("SELECT u.id, u.username, u.role, u.status FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active' AND u.must_change_password = 0").bind(hash, Date.now()).first<SessionUser>();
 }
 export function validOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");

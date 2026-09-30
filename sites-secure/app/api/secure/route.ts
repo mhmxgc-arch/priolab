@@ -6,7 +6,8 @@ export const runtime = "edge";
 const now = () => Date.now();
 const usernameOf = (value: unknown) => String(value ?? "").trim().toLowerCase();
 const validUsername = (value: string) => /^[\p{L}\p{N}._-]{3,40}$/u.test(value);
-const validPassword = (value: unknown) => typeof value === "string" && value.length >= 12 && value.length <= 128;
+const validPassword = (value: unknown) => typeof value === "string" && value.length >= 8 && value.length <= 128;
+const strongPassword = (value: unknown) => validPassword(value) && /[A-Z]/.test(value as string) && /[a-z]/.test(value as string) && /[0-9]/.test(value as string) && /[^A-Za-z0-9\s]/.test(value as string);
 const validIp = (value: string) => value.length <= 45 && (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) ? value.split(".").every(part => Number(part) <= 255) : /^[a-f0-9:]+$/.test(value) && value.includes(":"));
 const secureHeaders = (request: Request) => request.headers.get("oai-authenticated-user-id");
 async function attemptsKey(request: Request, username: string) { return sha256(`${clientIp(request) || "unknown"}|${username}`); }
@@ -75,18 +76,30 @@ export async function POST(request: Request) {
       const count = await database().prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
       if (count?.total || !secureHeaders(request)) return error("הגדרת מנהל אינה זמינה", 403);
       const username = usernameOf(body.username);
-      if (!validUsername(username) || !validPassword(body.password)) return error("נדרש שם משתמש תקין וסיסמה בת 12 תווים לפחות");
+      if (!validUsername(username) || !validPassword(body.password)) return error("נדרש שם משתמש תקין וסיסמה ראשונית בת 8 תווים לפחות");
       const salt = randomHex(16), secret = newTotpSecret(), id = crypto.randomUUID();
-      await database().prepare("INSERT INTO users (id, username, salt, password_hash, totp_secret, last_totp_step, role, status, created_at) VALUES (?, ?, ?, ?, ?, -1, 'admin', 'pending', ?)").bind(id, username, salt, await passwordHash(String(body.password), salt), await encryptTotp(secret, encryptionKey()), now()).run();
-      return json({ enroll: true, secret, uri: totpUri(username, secret) }, 201);
+      await database().prepare("INSERT INTO users (id, username, salt, password_hash, totp_secret, last_totp_step, role, status, must_change_password, created_at) VALUES (?, ?, ?, ?, ?, -1, 'admin', 'pending', 1, ?)").bind(id, username, salt, await passwordHash(String(body.password), salt), await encryptTotp(secret, encryptionKey()), now()).run();
+      return json({ changeRequired: true }, 201);
     }
-    if (action === "login" || action === "enroll") {
+    if (action === "login" || action === "enroll" || action === "password.change") {
       const username = usernameOf(body.username);
       if (!validUsername(username)) return error("פרטי הכניסה שגויים", 401);
       const result = await authenticatePassword(request, username, body.password);
       if (result.throttled) return error("יותר מדי ניסיונות. נסה שוב בעוד 15 דקות", 429);
       if (!result.user) return error("פרטי הכניסה שגויים", 401);
       const user = result.user;
+      if (action === "password.change") {
+        if (user.must_change_password !== 1) return error("לא נדרשת החלפת סיסמה", 400);
+        if (!strongPassword(body.newPassword) || constantEqual(String(body.password), String(body.newPassword))) return error("בחר סיסמה חדשה בת 8 תווים לפחות עם אות גדולה, אות קטנה, ספרה וסימן מיוחד, ושונה מהקודמת");
+        const salt = randomHex(16);
+        const changed = await database().prepare("UPDATE users SET salt = ?, password_hash = ?, must_change_password = 0 WHERE id = ? AND password_hash = ? AND must_change_password = 1").bind(salt, await passwordHash(String(body.newPassword), salt), user.id, user.password_hash).run();
+        if (changed.meta.changes !== 1) return error("הסיסמה כבר הוחלפה. היכנס מחדש", 409);
+        await database().prepare("DELETE FROM sessions WHERE user_id = ?").bind(user.id).run();
+        await clearAttempts(result.key);
+        const secret = await decryptTotp(user.totp_secret, encryptionKey());
+        return json({ enroll: true, secret, uri: totpUri(username, secret) });
+      }
+      if (user.must_change_password === 1) return action === "login" ? json({ changeRequired: true }) : error("יש להחליף את הסיסמה הראשונית", 403);
       const secret = await decryptTotp(user.totp_secret, encryptionKey());
       if (user.status === "pending" && action === "login") return json({ enroll: true, secret, uri: totpUri(username, secret) });
       if ((user.status === "pending") !== (action === "enroll")) return error("שלב האימות אינו תקין", 400);
@@ -124,7 +137,7 @@ export async function POST(request: Request) {
       if (!validUsername(username) || !validPassword(body.password) || !["admin", "editor", "viewer"].includes(role)) return error("פרטי המשתמש אינם תקינים");
       if (await getUser(username)) return error("שם המשתמש כבר קיים", 409);
       const salt = randomHex(16), secret = newTotpSecret();
-      await database().prepare("INSERT INTO users (id, username, salt, password_hash, totp_secret, last_totp_step, role, status, created_at) VALUES (?, ?, ?, ?, ?, -1, ?, 'pending', ?)").bind(crypto.randomUUID(), username, salt, await passwordHash(String(body.password), salt), await encryptTotp(secret, encryptionKey()), role, now()).run();
+      await database().prepare("INSERT INTO users (id, username, salt, password_hash, totp_secret, last_totp_step, role, status, must_change_password, created_at) VALUES (?, ?, ?, ?, ?, -1, ?, 'pending', 1, ?)").bind(crypto.randomUUID(), username, salt, await passwordHash(String(body.password), salt), await encryptTotp(secret, encryptionKey()), role, now()).run();
       return json({ ok: true }, 201);
     }
     if (action === "users.toggle") {
@@ -143,7 +156,7 @@ export async function POST(request: Request) {
       const id = String(body.id || ""), target = await database().prepare("SELECT id FROM users WHERE id = ?").bind(id).first();
       if (!target || id === user.id || !validPassword(body.password)) return error("לא ניתן לאפס משתמש זה");
       const salt = randomHex(16), secret = newTotpSecret();
-      await database().prepare("UPDATE users SET salt = ?, password_hash = ?, totp_secret = ?, last_totp_step = -1, status = 'pending' WHERE id = ?").bind(salt, await passwordHash(String(body.password), salt), await encryptTotp(secret, encryptionKey()), id).run();
+      await database().prepare("UPDATE users SET salt = ?, password_hash = ?, totp_secret = ?, last_totp_step = -1, status = 'pending', must_change_password = 1 WHERE id = ?").bind(salt, await passwordHash(String(body.password), salt), await encryptTotp(secret, encryptionKey()), id).run();
       await database().prepare("DELETE FROM sessions WHERE user_id = ?").bind(id).run();
       return json({ ok: true });
     }

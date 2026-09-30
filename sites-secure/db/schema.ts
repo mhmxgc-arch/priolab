@@ -9,6 +9,7 @@ export const users = sqliteTable("users", {
   lastTotpStep: integer("last_totp_step").notNull().default(-1),
   role: text("role").notNull(),
   status: text("status").notNull(),
+  mustChangePassword: integer("must_change_password").notNull().default(1),
   createdAt: integer("created_at").notNull(),
 }, (table) => [uniqueIndex("idx_users_username").on(table.username)]);
 
