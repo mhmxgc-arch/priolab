@@ -52,6 +52,11 @@ assert.equal((await get('reports.manage','')).status,401);
 const saved=await call('reports.save',report,cookie);assert.equal(saved.status,200);const id=saved.data.id;
 assert.equal((await get('reports')).data.reports.length,1);
 let metadata=(await get('reports.manage')).data.reports;assert.equal(metadata[0].rowCount,2);assert.equal(metadata[0].hidden,0);assert.equal(metadata[0].rowsJson,undefined);
+// Generic expenses from Priority reports are preserved; unknown sections stay rejected.
+const withExpenses={...report,rows:[...report.rows,{section:'הוצאות',name:'insurance',group:'general',account:'300',amount:10}]};
+assert.equal((await call('reports.save',withExpenses,cookie)).status,200);
+assert.equal((await get('reports')).data.reports[0].rows.find(r=>r.section==='הוצאות').amount,10);
+assert.equal((await call('reports.save',{...report,rows:[...report.rows,{section:'unknown',name:'x',amount:1}]},cookie)).status,400);
 assert.equal((await call('reports.visibility',{id,hidden:true},cookie)).status,200);
 assert.equal((await get('reports')).data.reports.length,0);
 assert.equal((await get('reports.manage')).data.reports[0].hidden,1);
@@ -80,3 +85,4 @@ const recovery=spawnSync(process.execPath,[path.join(scriptDir,'bootstrap-admin.
 assert.equal(recovery.status,0,recovery.stderr);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM reports').get().n,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,0);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM login_attempts').get().n,0);
 assert.equal((await call('login',{username:'admin',password:'RecoveryInitial!29'})).data.changeRequired,true);
 Date.now=originalNow;db.close();rmSync(temp,{recursive:true,force:true});console.log('PASS: first login, password policy, RFC TOTP, invalid OTP, timed lock, unlock, admin session, replay rejection, report lifecycle, role permissions and local recovery.');
+

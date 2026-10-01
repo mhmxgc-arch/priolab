@@ -140,7 +140,7 @@ export async function POST(request: Request) {
       if (user.role === "viewer") return error("אין הרשאת עריכה", 403);
       const description = String(body.description || "").trim(), year = Number(body.taxYear), from = Number(body.from), to = Number(body.to), filename = String(body.filename || "").slice(0, 180), rows = body.rows;
       if (!description || description.length > 100 || !Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to > 12 || from > to || !Array.isArray(rows) || rows.length < 2 || rows.length > 5000) return error("פרטי הדוח אינם תקינים");
-      const sections = new Set(["הכנסות", "עלות המכירות", "הוצאות הנהלה וכלליות", "הוצאות מימון", "מיסים שוטפים"]);
+      const sections = new Set(["הכנסות", "עלות המכירות", "הוצאות הנהלה וכלליות", "הוצאות מימון", "מיסים שוטפים", "הוצאות"]);
       if (rows.some(row => typeof row !== "object" || !row || !sections.has(row.section) || !Number.isFinite(row.amount) || String(row.name || "").length > 500 || String(row.group || "").length > 200 || String(row.account || "").length > 50)) return error("תוכן הדוח אינו תקין");
       const data = JSON.stringify(rows);
       if (data.length > 1_500_000) return error("הדוח גדול מדי", 413);
