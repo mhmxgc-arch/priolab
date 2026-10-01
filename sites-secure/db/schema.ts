@@ -45,6 +45,7 @@ export const reports = sqliteTable("reports", {
   toMonth: integer("to_month").notNull(),
   filename: text("filename").notNull(),
   rowsJson: text("rows_json").notNull(),
+  hidden: integer("hidden").notNull().default(0),
   createdBy: text("created_by").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [uniqueIndex("idx_reports_period_description").on(table.taxYear, table.fromMonth, table.toMonth, table.description)]);

@@ -57,8 +57,13 @@ export async function GET(request: Request) {
     const user = await sessionUser(request);
     if (!user) return error("נדרש אימות", 401);
     if (action === "reports") {
-      const result = await database().prepare("SELECT * FROM reports ORDER BY tax_year DESC, to_month DESC, updated_at DESC").all<Record<string, unknown>>();
+      const result = await database().prepare("SELECT * FROM reports WHERE hidden = 0 ORDER BY tax_year DESC, to_month DESC, updated_at DESC").all<Record<string, unknown>>();
       return json({ reports: result.results.map(reportRow) });
+    }
+    if (action === "reports.manage") {
+      if (user.role !== "admin") return error("אין הרשאת מנהל", 403);
+      const result = await database().prepare("SELECT r.id, r.description, r.tax_year AS taxYear, r.from_month AS fromMonth, r.to_month AS toMonth, r.filename, r.hidden, r.updated_at AS updatedAt, json_array_length(r.rows_json) AS rowCount, r.created_by = 'system-migration' AS legacyPeriod FROM reports r ORDER BY r.updated_at DESC").all();
+      return json({ reports: result.results });
     }
     if (action === "settings") {
       if (user.role !== "admin") return error("אין הרשאה", 403);
@@ -141,11 +146,21 @@ export async function POST(request: Request) {
       if (data.length > 1_500_000) return error("הדוח גדול מדי", 413);
       const old = await database().prepare("SELECT id FROM reports WHERE tax_year = ? AND from_month = ? AND to_month = ? AND description = ?").bind(year, from, to, description).first<{ id: string }>();
       const id = old?.id || crypto.randomUUID();
-      if (old) await database().prepare("UPDATE reports SET filename = ?, rows_json = ?, updated_at = ?, created_by = ? WHERE id = ?").bind(filename, data, now(), user.id, id).run();
+      if (old) await database().prepare("UPDATE reports SET filename = ?, rows_json = ?, updated_at = ?, created_by = ?, hidden = 0 WHERE id = ?").bind(filename, data, now(), user.id, id).run();
       else await database().prepare("INSERT INTO reports (id, description, tax_year, from_month, to_month, filename, rows_json, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, description, year, from, to, filename, data, user.id, now()).run();
       return json({ id, replaced: !!old });
     }
     if (user.role !== "admin") return error("אין הרשאת מנהל", 403);
+    if (action === "reports.visibility" || action === "reports.delete") {
+      const id = String(body.id || "");
+      if (!id || id.length > 100) return error("מזהה דוח אינו תקין");
+      if (action === "reports.visibility" && typeof body.hidden !== "boolean") return error("מצב תצוגה אינו תקין");
+      const result = action === "reports.delete"
+        ? await database().prepare("DELETE FROM reports WHERE id = ?").bind(id).run()
+        : await database().prepare("UPDATE reports SET hidden = ? WHERE id = ?").bind(body.hidden ? 1 : 0, id).run();
+      if (result.meta.changes !== 1) return error("הדוח אינו קיים. רענן את הרשימה", 404);
+      return json({ ok: true });
+    }
     if (action === "users.create") {
       const username = usernameOf(body.username), role = String(body.role || "viewer");
       if (!validUsername(username) || !validPassword(body.password) || !["admin", "editor", "viewer"].includes(role)) return error("פרטי המשתמש אינם תקינים");

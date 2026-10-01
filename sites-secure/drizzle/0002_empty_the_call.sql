@@ -1,0 +1,1 @@
+ALTER TABLE `reports` ADD `hidden` integer DEFAULT 0 NOT NULL;

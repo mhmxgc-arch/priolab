@@ -44,9 +44,39 @@ timestamp+=1;const success=await call('enroll',{...credentials,otp:code(secret)}
 const status=await api.GET(new Request('https://priolab.test/api/secure?action=status',{headers:{cookie:success.cookie.split(';')[0]}}));assert.equal((await status.json()).authenticated,true);
 assert.equal((await call('login',credentials)).data.otpRequired,true);
 assert.equal((await call('login',{...credentials,otp:code(secret)})).status,401);
+// Report management: durable hiding, restoring, replacing, deleting and role checks.
+const cookie=success.cookie.split(';')[0];
+const get=async(action,c=cookie)=>{const r=await api.GET(new Request('https://priolab.test/api/secure?action='+action,{headers:{cookie:c}}));return{status:r.status,data:await r.json()}};
+const report={description:'Test report',taxYear:2026,from:1,to:3,filename:'test.xlsx',rows:[{section:'הכנסות',name:'sales',group:'sales',account:'100',amount:100},{section:'עלות המכירות',name:'cost',group:'cost',account:'200',amount:40}]};
+assert.equal((await get('reports.manage','')).status,401);
+const saved=await call('reports.save',report,cookie);assert.equal(saved.status,200);const id=saved.data.id;
+assert.equal((await get('reports')).data.reports.length,1);
+let metadata=(await get('reports.manage')).data.reports;assert.equal(metadata[0].rowCount,2);assert.equal(metadata[0].hidden,0);assert.equal(metadata[0].rowsJson,undefined);
+assert.equal((await call('reports.visibility',{id,hidden:true},cookie)).status,200);
+assert.equal((await get('reports')).data.reports.length,0);
+assert.equal((await get('reports.manage')).data.reports[0].hidden,1);
+assert.equal(db.prepare('SELECT hidden FROM reports WHERE id=?').get(id).hidden,1);
+assert.equal((await call('reports.visibility',{id,hidden:'false'},cookie)).status,400);
+for(const role of ['viewer','editor']){
+ db.prepare("UPDATE users SET role=? WHERE username='admin'").run(role);
+ assert.equal((await get('reports.manage')).status,403);
+ assert.equal((await call('reports.delete',{id},cookie)).status,403);
+ assert.equal((await call('reports.visibility',{id,hidden:false},cookie)).status,403);
+ assert.equal((await get('reports')).data.reports.length,0);
+}
+db.prepare("UPDATE users SET role='admin' WHERE username='admin'").run();
+assert.equal((await call('reports.visibility',{id,hidden:false},cookie)).status,200);
+assert.equal((await get('reports')).data.reports.length,1);
+await call('reports.visibility',{id,hidden:true},cookie);
+const replacement=await call('reports.save',{...report,filename:'replacement.xlsx'},cookie);assert.equal(replacement.data.id,id);assert.equal(replacement.data.replaced,true);
+assert.equal((await get('reports')).data.reports[0].filename,'replacement.xlsx');
+assert.equal((await get('reports.manage')).data.reports[0].hidden,0);
+assert.equal((await call('reports.delete',{id},cookie)).status,200);
+assert.equal((await get('reports')).data.reports.length,0);assert.equal((await get('reports.manage')).data.reports.length,0);
+assert.equal((await call('reports.delete',{id},cookie)).status,404);
 // Recovery is local-only and invalidates old admin sessions without touching reports.
-db.prepare('INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?)').run('report','test',2026,1,2,'test.xlsx','[]','admin',timestamp);
+db.prepare('INSERT INTO reports (id,description,tax_year,from_month,to_month,filename,rows_json,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)').run('report','test',2026,1,2,'test.xlsx','[]','admin',timestamp);
 const recovery=spawnSync(process.execPath,[path.join(scriptDir,'bootstrap-admin.mjs'),'--recover'],{input:'RecoveryInitial!29',encoding:'utf8',env:{...process.env,APP_ENCRYPTION_KEY:key,PRIOLAB_DB_PATH:file}});
 assert.equal(recovery.status,0,recovery.stderr);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM reports').get().n,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,0);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM login_attempts').get().n,0);
 assert.equal((await call('login',{username:'admin',password:'RecoveryInitial!29'})).data.changeRequired,true);
-Date.now=originalNow;db.close();rmSync(temp,{recursive:true,force:true});console.log('PASS: first login, password policy, RFC TOTP, invalid OTP, timed lock, unlock, admin session, replay rejection and local recovery.');
+Date.now=originalNow;db.close();rmSync(temp,{recursive:true,force:true});console.log('PASS: first login, password policy, RFC TOTP, invalid OTP, timed lock, unlock, admin session, replay rejection, report lifecycle, role permissions and local recovery.');
