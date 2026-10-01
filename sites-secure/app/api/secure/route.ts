@@ -1,6 +1,7 @@
 import { database, encryptionKey, clientIp, json, error, sessionCookie, sessionUser, ipAllowed, validOrigin, type UserRow } from "@/lib/server";
 import { constantEqual, decryptTotp, encryptTotp, newTotpSecret, passwordHash, randomHex, sha256, totpUri, verifyTotp } from "@/lib/security";
 import { APP_VERSION } from "@/lib/version";
+import { LOGIN_LOCKOUT_MS, MAX_LOGIN_FAILURES } from "@/lib/auth-policy";
 
 export const runtime = "edge";
 const now = () => Date.now();
@@ -11,23 +12,29 @@ const strongPassword = (value: unknown) => validPassword(value) && /[A-Z]/.test(
 const validIp = (value: string) => value.length <= 45 && (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) ? value.split(".").every(part => Number(part) <= 255) : /^[a-f0-9:]+$/.test(value) && value.includes(":"));
 const secureHeaders = (request: Request) => request.headers.get("oai-authenticated-user-id");
 async function attemptsKey(request: Request, username: string) { return sha256(`${clientIp(request) || "unknown"}|${username}`); }
-async function locked(key: string): Promise<boolean> {
+async function retryAfter(key: string): Promise<number> {
   const row = await database().prepare("SELECT failures, window_start FROM login_attempts WHERE key = ?").bind(key).first<{ failures: number; window_start: number }>();
-  return !!row && row.failures >= 5 && now() - row.window_start < 15 * 60 * 1000;
+  return row && row.failures >= MAX_LOGIN_FAILURES ? Math.max(0, Math.ceil((row.window_start + LOGIN_LOCKOUT_MS - now()) / 1000)) : 0;
+}
+function throttledResponse(seconds: number) {
+  const response = json({ error: "יותר מדי ניסיונות. החסימה זמנית; המתן לסיום הספירה ונסה שוב", retryAfter: seconds, serverTime: now() }, 429);
+  response.headers.set("Retry-After", String(seconds));
+  return response;
 }
 async function failed(key: string) {
   const timestamp = now();
-  await database().prepare("INSERT INTO login_attempts (key, failures, window_start) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET failures = CASE WHEN ? - window_start > 900000 THEN 1 ELSE failures + 1 END, window_start = CASE WHEN ? - window_start > 900000 THEN ? ELSE window_start END").bind(key, timestamp, timestamp, timestamp, timestamp).run();
+  await database().prepare("INSERT INTO login_attempts (key, failures, window_start) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET failures = CASE WHEN ? - window_start >= ? THEN 1 ELSE failures + 1 END, window_start = CASE WHEN ? - window_start >= ? OR failures = ? THEN ? ELSE window_start END").bind(key, timestamp, timestamp, LOGIN_LOCKOUT_MS, timestamp, LOGIN_LOCKOUT_MS, MAX_LOGIN_FAILURES - 1, timestamp).run();
 }
 async function clearAttempts(key: string) { await database().prepare("DELETE FROM login_attempts WHERE key = ?").bind(key).run(); }
 async function getUser(username: string) { return database().prepare("SELECT * FROM users WHERE username = ?").bind(username).first<UserRow>(); }
 async function authenticatePassword(request: Request, username: string, password: unknown) {
   const key = await attemptsKey(request, username);
-  if (await locked(key)) return { key, user: null, throttled: true };
+  const delay = await retryAfter(key);
+  if (delay) return { key, user: null, retryAfter: delay };
   const user = await getUser(username);
   const hash = await passwordHash(typeof password === "string" ? password : "", user?.salt || "00".repeat(16));
-  if (!user || user.status === "disabled" || !constantEqual(hash, user.password_hash)) { await failed(key); return { key, user: null, throttled: false }; }
-  return { key, user, throttled: false };
+  if (!user || user.status === "disabled" || !constantEqual(hash, user.password_hash)) { await failed(key); return { key, user: null, retryAfter: await retryAfter(key) }; }
+  return { key, user, retryAfter: 0 };
 }
 async function createSession(userId: string) {
   const token = randomHex();
@@ -86,7 +93,7 @@ export async function POST(request: Request) {
       const username = usernameOf(body.username);
       if (!validUsername(username)) return error("פרטי הכניסה שגויים", 401);
       const result = await authenticatePassword(request, username, body.password);
-      if (result.throttled) return error("יותר מדי ניסיונות. נסה שוב בעוד 15 דקות", 429);
+      if (result.retryAfter) return throttledResponse(result.retryAfter);
       if (!result.user) return error("פרטי הכניסה שגויים", 401);
       const user = result.user;
       if (action === "password.change") {
@@ -98,15 +105,20 @@ export async function POST(request: Request) {
         await database().prepare("DELETE FROM sessions WHERE user_id = ?").bind(user.id).run();
         await clearAttempts(result.key);
         const secret = await decryptTotp(user.totp_secret, encryptionKey());
-        return json({ enroll: true, secret, uri: totpUri(username, secret) });
+        return json({ enroll: true, secret, uri: totpUri(username, secret), serverTime: now() });
       }
       if (user.must_change_password === 1) return action === "login" ? json({ changeRequired: true }) : error("יש להחליף את הסיסמה הראשונית", 403);
       const secret = await decryptTotp(user.totp_secret, encryptionKey());
-      if (user.status === "pending" && action === "login") return json({ enroll: true, secret, uri: totpUri(username, secret) });
+      if (user.status === "pending" && action === "login") return json({ enroll: true, secret, uri: totpUri(username, secret), serverTime: now() });
       if ((user.status === "pending") !== (action === "enroll")) return error("שלב האימות אינו תקין", 400);
       if (action === "login" && !body.otp) return json({ otpRequired: true });
       const step = await verifyTotp(secret, String(body.otp || ""), user.last_totp_step);
-      if (step === null) { await failed(result.key); return error("קוד האימות שגוי", 401); }
+      if (step === null) {
+        await failed(result.key);
+        const delay = await retryAfter(result.key);
+        if (delay) return throttledResponse(delay);
+        return json({ error: "קוד האימות לא התקבל. השתמש בחשבון Priolab שבאפליקציה, הפעל תאריך ושעה אוטומטיים בטלפון ונסה קוד חדש", serverTime: now() }, 401);
+      }
       const updated = await database().prepare("UPDATE users SET last_totp_step = ?, status = 'active' WHERE id = ? AND last_totp_step < ? AND status = ?").bind(step, user.id, step, user.status).run();
       if (updated.meta.changes !== 1) return error("קוד האימות כבר שימש", 401);
       await clearAttempts(result.key);

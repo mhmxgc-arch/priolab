@@ -19,3 +19,5 @@
 .password-change{display:grid;gap:14px;padding:16px;border:1px solid #c9dfee;background:#f1f7fb;border-radius:10px}.password-change p{font-size:14px;line-height:1.5;color:#526c81;margin:0}
 
 .enroll{font-size:14px}.enrollment-qr{display:flex;justify-content:center;margin:16px 0}.enrollment-qr svg{display:block;width:224px;max-width:100%;height:auto;background:#fff;border-radius:8px}.enroll .muted{margin:0;font-size:14px;line-height:1.6}
+
+.lock-countdown{margin:0;color:#764e12;font-size:14px}.auth-back{border:1px solid #c6dce9;border-radius:9px;background:#fff;color:#055b9b;padding:12px}

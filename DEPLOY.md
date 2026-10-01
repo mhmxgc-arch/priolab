@@ -50,3 +50,40 @@ login requires a different complex password (8 or more characters, with an
 uppercase letter, lowercase letter, digit and symbol). In Google Authenticator, choose + and scan the displayed QR code, then enter
 its six-digit code to finish.
 Further users are created from the admin screen.
+
+## Admin recovery on APP-01
+
+If admin is locked out or its Authenticator setup is lost, run these commands
+in an interactive Bash session on APP-01. This operator-only command replaces
+admin's password and TOTP secret, enables the account, invalidates its sessions
+and clears temporary login throttles. It preserves reports and IP rules.
+
+```sh
+read -rsp 'New temporary admin password: ' PRIOLAB_ADMIN_PASSWORD
+printf '\n'
+printf '%s' "$PRIOLAB_ADMIN_PASSWORD" | docker exec -i priolab node /app/bootstrap-admin.mjs --recover
+unset PRIOLAB_ADMIN_PASSWORD
+```
+
+Log in with the new temporary password, choose a different complex password,
+and scan the NEW QR code. The old Authenticator entry will no longer work.
+Set the phone's date and time automatically. A mismatched server clock must be
+corrected on APP-01; changing its timezone does not fix TOTP clock drift.
+
+## Temporary testing lockout
+
+Version 2.1.3 uses a 60-second lockout after five failed attempts. This also
+shortens existing lockouts. The UI shows the remaining wait from the server.
+Restore `LOGIN_LOCKOUT_MS` in `sites-secure/lib/auth-policy.ts` to
+`15 * 60_000` when testing is complete, then build and deploy the change.
+The live container's version can be checked on APP-01 with:
+
+```sh
+docker exec priolab node -e "fetch('http://127.0.0.1:3000/api/secure?action=status').then(r=>r.json()).then(x=>console.log(x.version))"
+```
+
+Authentication regression checks (after installing Sites source dependencies):
+
+```sh
+node deploy/v2/auth-smoke.mjs sites-secure
+```

@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { randomBytes, randomUUID, pbkdf2Sync, createCipheriv } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
+const recover = process.argv[2] === '--recover';
+if (process.argv.length > 2 && !recover) { console.error('Usage: bootstrap-admin.mjs [--recover]'); process.exit(1); }
 const raw = readFileSync(0, 'utf8');
 const password = raw.replace(/\r?\n$/, '');
 if (password.length < 8 || password.length > 128) {
@@ -35,9 +37,20 @@ const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final(),
 const encryptedSecret = `${iv.toString('base64')}.${ciphertext.toString('base64')}`;
 const db = new DatabaseSync(process.env.PRIOLAB_DB_PATH || '/data/priolab.sqlite');
 try {
-  db.exec('BEGIN IMMEDIATE');
+  db.exec('PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE');
   const count = db.prepare('SELECT COUNT(*) AS total FROM users').get().total;
-  if (count !== 0) {
+  if (recover) {
+    const admin = db.prepare("SELECT id FROM users WHERE username = 'admin' AND role = 'admin'").get();
+    if (!admin) throw new Error('No admin account exists. Run without --recover to initialize an empty database.');
+    db.prepare("UPDATE users SET salt = ?, password_hash = ?, totp_secret = ?, last_totp_step = -1, status = 'pending', must_change_password = 1 WHERE id = ? AND role = 'admin'")
+      .run(salt.toString('hex'), hash, encryptedSecret, admin.id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(admin.id);
+    // Attempt keys are hashed IP/username pairs, so recovery clears temporary
+    // throttles without modifying another account's credentials or sessions.
+    db.exec('DELETE FROM login_attempts');
+    db.exec('COMMIT');
+    console.log('Admin recovered. Log in with the new temporary password, change it, and scan the new QR code.');
+  } else if (count !== 0) {
     db.exec('ROLLBACK');
     console.error('Admin setup stopped: users already exist. No account was changed.');
     process.exitCode = 1;

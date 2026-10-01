@@ -8,7 +8,7 @@ type Rule = { address: string; created_at: number };
 type Settings = { users: User[]; ipRules: Rule[]; ipEnforced: boolean; currentIp: string | null };
 
 export default function Home() {
-  const [version, setVersion] = useState("2.1.2");
+  const [version, setVersion] = useState("2.1.3");
   const [setup, setSetup] = useState(false);
   const [setupUnavailable, setSetupUnavailable] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -26,6 +26,9 @@ export default function Home() {
   const [address, setAddress] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [lockSeconds, setLockSeconds] = useState(0);
+  const [clockWarning, setClockWarning] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const get = useCallback(async (action: string) => {
@@ -37,9 +40,26 @@ export default function Home() {
   const post = useCallback(async (action: string, values: Record<string, unknown> = {}) => {
     const response = await fetch("/api/secure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...values }) });
     const data = await response.json() as any;
+    if (typeof data.serverTime === "number") setClockWarning(Math.abs(Date.now() - data.serverTime) > 60_000);
+    if (response.status === 429 && typeof data.retryAfter === "number") {
+      setLockedUntil(Date.now() + data.retryAfter * 1000);
+      setLockSeconds(data.retryAfter);
+    }
     if (!response.ok) throw new Error(data.error || "הפעולה נכשלה");
     return data;
   }, []);
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+      setLockSeconds(remaining);
+      if (!remaining) {
+        setLockedUntil(0);
+        setNotice(current => current.startsWith("יותר מדי ניסיונות") ? "החסימה הסתיימה. ניתן לנסות שוב עם קוד חדש מהאפליקציה" : current);
+      }
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [lockedUntil]);
   const refreshSettings = useCallback(async () => setSettings(await get("settings")), [get]);
   useEffect(() => { get("status").then(data => { setVersion(data.version); setSetup(data.setup); setSetupUnavailable(!!data.setupUnavailable); setUser(data.user); }).catch((error: Error) => setNotice(error.message)).finally(() => setLoading(false)); }, [get]);
   useEffect(() => { if (view === "settings" && user?.role === "admin") refreshSettings().catch((error: Error) => setNotice(error.message)); }, [view, user, refreshSettings]);
@@ -50,7 +70,7 @@ export default function Home() {
     finally { setBusy(false); }
   }
   async function submitLogin(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setNotice("");
+    event.preventDefault(); if (lockSeconds) return; setBusy(true); setNotice("");
     try {
       if (changeRequired && newPassword !== confirmPassword) throw new Error("אימות הסיסמה החדשה אינו תואם");
       const result = await post(setup ? "bootstrap" : changeRequired ? "password.change" : enrollment ? "enroll" : "login", { username, password, otp, ...(changeRequired ? { newPassword } : {}) });
@@ -58,7 +78,7 @@ export default function Home() {
       else if (result.enroll) { setEnrollment({ secret: result.secret, uri: result.uri }); setChangeRequired(false); setPassword(newPassword || password); setNewPassword(""); setConfirmPassword(""); setOtp(""); }
       else if (result.otpRequired) setOtpRequired(true);
       else { setUser(result.user); setEnrollment(null); setPassword(""); setOtpRequired(false); setOtp(""); }
-    } catch (error) { setNotice((error as Error).message); }
+    } catch (error) { setOtp(""); setNotice((error as Error).message); }
     finally { setBusy(false); }
   }
   async function logout() { try { await post("logout"); setUser(null); setSettings(null); setView("reports"); setEnrollment(null); setChangeRequired(false); setOtpRequired(false); } catch (error) { setNotice((error as Error).message); } }
@@ -70,10 +90,13 @@ export default function Home() {
       <label>שם משתמש<input autoComplete="username" required value={username} onChange={e => setUsername(e.target.value)} /></label>
       <label>{changeRequired ? "סיסמה ראשונית" : "סיסמה"}<input type="password" autoComplete={setup ? "new-password" : "current-password"} required minLength={setup ? 8 : undefined} value={password} onChange={e => setPassword(e.target.value)} /></label>
       {changeRequired && <div className="password-change"><strong>יש להחליף סיסמה לפני הכניסה</strong><p>לפחות 8 תווים, כולל אות גדולה, אות קטנה, ספרה וסימן מיוחד. לאחר מכן תחבר את Google Authenticator.</p><label>סיסמה חדשה<input type="password" autoComplete="new-password" minLength={8} required value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label><label>אימות סיסמה חדשה<input type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label></div>}
-      {enrollment && <div className="enroll"><strong>חיבור Google Authenticator</strong><p>פתחו את Google Authenticator, לחצו על + ובחרו ״סריקת קוד QR״. סרקו את הקוד הבא:</p><div className="enrollment-qr"><QRCodeSVG value={enrollment.uri} size={224} level="M" marginSize={4} title="קוד QR לחיבור Google Authenticator" /></div><p className="muted">לאחר הסריקה הזינו למטה את הקוד בן שש הספרות שמופיע באפליקציה כדי לסיים את החיבור.</p></div>}
+      {enrollment && <div className="enroll"><strong>חיבור Google Authenticator</strong><p>פתחו את Google Authenticator, לחצו על + ובחרו ״סריקת קוד QR״. סרקו את הקוד הבא:</p><div className="enrollment-qr"><QRCodeSVG value={enrollment.uri} size={224} level="M" marginSize={4} title="קוד QR לחיבור Google Authenticator" /></div><p className="muted">לאחר הסריקה הזינו למטה את הקוד בן שש הספרות של חשבון Priolab. ודאו שבטלפון מוגדרים תאריך ושעה אוטומטיים.</p></div>}
       {!setup && !changeRequired && (otpRequired || enrollment) && <label>קוד Google Authenticator<input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" placeholder="000000" required value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ""))} /></label>}
+      {clockWarning && <div className="notice" role="alert">שעון המכשיר שונה משעון השרת. בדקו שהזמן מסונכרן אוטומטית במחשב ובטלפון; אם ההודעה נמשכת יש לבדוק את שעון השרת.</div>}
       {notice && <div className="notice" role="alert">{notice}</div>}
-      <button disabled={busy} className="primary">{busy ? "מאמת…" : setup ? "יצירת מנהל ראשי" : changeRequired ? "החלפת סיסמה והמשך" : enrollment ? "סיום הגדרה וכניסה" : "כניסה למערכת"}</button>
+      {lockSeconds > 0 && <p className="lock-countdown" role="status">אפשר לנסות שוב בעוד {lockSeconds} שניות</p>}
+      <button disabled={busy || lockSeconds > 0} className="primary">{busy ? "מאמת…" : setup ? "יצירת מנהל ראשי" : changeRequired ? "החלפת סיסמה והמשך" : enrollment ? "סיום הגדרה וכניסה" : "כניסה למערכת"}</button>
+      {(enrollment || changeRequired || otpRequired) && <button type="button" disabled={busy} className="auth-back" onClick={() => { setEnrollment(null); setChangeRequired(false); setOtpRequired(false); setPassword(""); setNewPassword(""); setConfirmPassword(""); setOtp(""); setNotice(""); }}>חזרה לכניסה</button>}
     </form>}<footer>גרסה {version} · גישה למורשים בלבד</footer>
   </div></main>;
   return <main className="app-shell"><header className="topbar"><div className="topbrand"><img className="header-logo" src="/xpress.png" alt="Xpress Technologies" /><span><b>Priolab</b><small>מערכת ניתוח פיננסי</small></span></div><nav><button className={view === "reports" ? "selected" : ""} onClick={() => setView("reports")}>דוחות וניתוח</button>{user.role === "admin" && <button className={view === "settings" ? "selected" : ""} onClick={() => setView("settings")}>הגדרות ואבטחה</button>}</nav><div className="account"><span>{user.username} · {user.role === "admin" ? "מנהל" : user.role === "editor" ? "עורך" : "צופה"}</span><button onClick={logout}>יציאה</button></div></header>
