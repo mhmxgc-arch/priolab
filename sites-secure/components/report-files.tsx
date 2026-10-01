@@ -8,11 +8,11 @@ type ReportFile = {
   rowCount: number; legacyPeriod: number;
 };
 
-async function request(action: string, values?: Record<string, unknown>) {
-  const response = await fetch(values ? "/api/secure" : `/api/secure?action=${action}`, {
+async function request(companyId: string, action: string, values?: Record<string, unknown>) {
+  const response = await fetch(values ? "/api/secure" : `/api/secure?action=${action}&companyId=${encodeURIComponent(companyId)}`, {
     method: values ? "POST" : "GET", cache: "no-store",
     headers: values ? { "Content-Type": "application/json" } : undefined,
-    body: values ? JSON.stringify({ action, ...values }) : undefined,
+    body: values ? JSON.stringify({ action, ...values, companyId }) : undefined,
   });
   const data = await response.json() as { error?: string; reports?: ReportFile[] };
   if (!response.ok) throw new Error(data.error || "הפעולה נכשלה");
@@ -23,7 +23,7 @@ function period(file: ReportFile) {
   return file.legacyPeriod ? `${file.taxYear} · תקופה לא ידועה` : `${file.taxYear} · חודשים ${file.fromMonth}–${file.toMonth}`;
 }
 
-export function ReportFiles() {
+export function ReportFiles({ companyId }: { companyId: string }) {
   const [files, setFiles] = useState<ReportFile[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -37,11 +37,11 @@ export function ReportFiles() {
   const dialog = useRef<HTMLDialogElement>(null);
 
   const refresh = useCallback(async () => {
-    const data = await request("reports.manage");
+    const data = await request(companyId, "reports.manage");
     if (!Array.isArray(data.reports)) throw new Error("רשימת הדוחות אינה זמינה כעת");
     setFiles(data.reports);
     setLoaded(true);
-  }, []);
+  }, [companyId]);
   const load = useCallback(async () => {
     setLoading(true); setFailure("");
     try { await refresh(); }
@@ -66,7 +66,7 @@ export function ReportFiles() {
   async function change(action: "reports.visibility" | "reports.delete", file: ReportFile) {
     setBusy(true); setNotice(""); setFailure("");
     try {
-      await request(action, { id: file.id, ...(action === "reports.visibility" ? { hidden: !file.hidden } : {}) });
+      await request(companyId, action, { id: file.id, ...(action === "reports.visibility" ? { hidden: !file.hidden } : {}) });
       setToDelete(null);
       await refresh();
       setNotice(action === "reports.delete" ? "הדוח והנתונים שלו נמחקו מהמערכת" : file.hidden ? "הדוח הוחזר לדשבורד ולהשוואות" : "הדוח הוסתר מהדשבורד ומההשוואות. ניתן להחזירו בכל עת");

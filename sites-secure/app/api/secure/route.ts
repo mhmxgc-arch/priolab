@@ -1,3 +1,4 @@
+import { companyAccess, ANALYSIS_MODULES } from "@/lib/tenancy";
 import { database, encryptionKey, clientIp, json, error, sessionCookie, sessionUser, ipAllowed, validOrigin, type UserRow } from "@/lib/server";
 import { constantEqual, decryptTotp, encryptTotp, newTotpSecret, passwordHash, randomHex, sha256, totpUri, verifyTotp } from "@/lib/security";
 import { APP_VERSION } from "@/lib/version";
@@ -42,12 +43,12 @@ async function createSession(userId: string) {
   return token;
 }
 function publicUser(user: { id: string; username: string; role: string; status: string }) { return { id: user.id, username: user.username, role: user.role, status: user.status }; }
-function reportRow(row: Record<string, unknown>) { return { id: row.id, description: row.description, taxYear: String(row.tax_year), period: String(row.tax_year), from: row.created_by === "system-migration" ? null : row.from_month, to: row.created_by === "system-migration" ? null : row.to_month, filename: row.filename, rows: JSON.parse(String(row.rows_json)) }; }
+function reportRow(row: Record<string, unknown>) { return { id: row.id, companyId: row.company_id, moduleKey: row.module_key, description: row.description, taxYear: String(row.tax_year), period: String(row.tax_year), from: row.created_by === "system-migration" ? null : row.from_month, to: row.created_by === "system-migration" ? null : row.to_month, filename: row.filename, rows: JSON.parse(String(row.rows_json)) }; }
 
 export async function GET(request: Request) {
   try {
     if (!await ipAllowed(request)) return error("גישה מכתובת IP זו אינה מורשית", 403);
-    const action = new URL(request.url).searchParams.get("action");
+    const action = new URL(request.url).searchParams.get("action") || "";
     if (action === "status") {
       const count = await database().prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
       const user = await sessionUser(request);
@@ -56,13 +57,26 @@ export async function GET(request: Request) {
     }
     const user = await sessionUser(request);
     if (!user) return error("נדרש אימות", 401);
+    const companyId = new URL(request.url).searchParams.get("companyId") || "";
+    if (action === "companies") {
+      const result = user.role === "admin"
+        ? await database().prepare("SELECT id, name, registration FROM companies ORDER BY name").all()
+        : await database().prepare("SELECT c.id, c.name, c.registration FROM companies c JOIN company_members m ON m.company_id = c.id WHERE m.user_id = ? ORDER BY c.name").bind(user.id).all();
+      return json({ companies: result.results, modules: ANALYSIS_MODULES });
+    }
+    if (action === "companies.members") {
+      if (user.role !== "admin" || !await companyAccess(user, companyId)) return error("אין הרשאה לחברה", 403);
+      const members = await database().prepare("SELECT user_id AS userId FROM company_members WHERE company_id = ?").bind(companyId).all();
+      return json({ members: members.results });
+    }
+    if (action.startsWith("reports") && !await companyAccess(user, companyId)) return error("יש לבחור חברה מורשית", 403);
     if (action === "reports") {
-      const result = await database().prepare("SELECT * FROM reports WHERE hidden = 0 ORDER BY tax_year DESC, to_month DESC, updated_at DESC").all<Record<string, unknown>>();
+      const result = await database().prepare("SELECT * FROM reports WHERE company_id = ? AND module_key = 'pnl' AND hidden = 0 ORDER BY tax_year DESC, to_month DESC, updated_at DESC").bind(companyId).all<Record<string, unknown>>();
       return json({ reports: result.results.map(reportRow) });
     }
     if (action === "reports.manage") {
       if (user.role !== "admin") return error("אין הרשאת מנהל", 403);
-      const result = await database().prepare("SELECT r.id, r.description, r.tax_year AS taxYear, r.from_month AS fromMonth, r.to_month AS toMonth, r.filename, r.hidden, r.updated_at AS updatedAt, json_array_length(r.rows_json) AS rowCount, r.created_by = 'system-migration' AS legacyPeriod FROM reports r ORDER BY r.updated_at DESC").all();
+      const result = await database().prepare("SELECT r.id, r.module_key AS moduleKey, r.description, r.tax_year AS taxYear, r.from_month AS fromMonth, r.to_month AS toMonth, r.filename, r.hidden, r.updated_at AS updatedAt, json_array_length(r.rows_json) AS rowCount, r.created_by = 'system-migration' AS legacyPeriod FROM reports r WHERE r.company_id = ? ORDER BY r.updated_at DESC").bind(companyId).all();
       return json({ reports: result.results });
     }
     if (action === "settings") {
@@ -136,7 +150,10 @@ export async function POST(request: Request) {
       if (token) await database().prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
       return json({ ok: true }, 200, sessionCookie("", 0));
     }
+    const companyId = String(body.companyId || "");
+    if (action.startsWith("reports") && !await companyAccess(user, companyId)) return error("יש לבחור חברה מורשית", 403);
     if (action === "reports.save") {
+      if (body.moduleKey && body.moduleKey !== "pnl") return error("מודול זה טרם זמין לטעינה");
       if (user.role === "viewer") return error("אין הרשאת עריכה", 403);
       const description = String(body.description || "").trim(), year = Number(body.taxYear), from = Number(body.from), to = Number(body.to), filename = String(body.filename || "").slice(0, 180), rows = body.rows;
       if (!description || description.length > 100 || !Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to > 12 || from > to || !Array.isArray(rows) || rows.length < 2 || rows.length > 5000) return error("פרטי הדוח אינם תקינים");
@@ -144,10 +161,10 @@ export async function POST(request: Request) {
       if (rows.some(row => typeof row !== "object" || !row || !sections.has(row.section) || !Number.isFinite(row.amount) || String(row.name || "").length > 500 || String(row.group || "").length > 200 || String(row.account || "").length > 50)) return error("תוכן הדוח אינו תקין");
       const data = JSON.stringify(rows);
       if (data.length > 1_500_000) return error("הדוח גדול מדי", 413);
-      const old = await database().prepare("SELECT id FROM reports WHERE tax_year = ? AND from_month = ? AND to_month = ? AND description = ?").bind(year, from, to, description).first<{ id: string }>();
+      const old = await database().prepare("SELECT id FROM reports WHERE company_id = ? AND module_key = 'pnl' AND tax_year = ? AND from_month = ? AND to_month = ? AND description = ?").bind(companyId, year, from, to, description).first<{ id: string }>();
       const id = old?.id || crypto.randomUUID();
-      if (old) await database().prepare("UPDATE reports SET filename = ?, rows_json = ?, updated_at = ?, created_by = ?, hidden = 0 WHERE id = ?").bind(filename, data, now(), user.id, id).run();
-      else await database().prepare("INSERT INTO reports (id, description, tax_year, from_month, to_month, filename, rows_json, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, description, year, from, to, filename, data, user.id, now()).run();
+      if (old) await database().prepare("UPDATE reports SET filename = ?, rows_json = ?, updated_at = ?, created_by = ?, hidden = 0 WHERE id = ? AND company_id = ?").bind(filename, data, now(), user.id, id, companyId).run();
+      else await database().prepare("INSERT INTO reports (id, company_id, module_key, description, tax_year, from_month, to_month, filename, rows_json, created_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, companyId, "pnl", description, year, from, to, filename, data, user.id, now()).run();
       return json({ id, replaced: !!old });
     }
     if (user.role !== "admin") return error("אין הרשאת מנהל", 403);
@@ -156,9 +173,32 @@ export async function POST(request: Request) {
       if (!id || id.length > 100) return error("מזהה דוח אינו תקין");
       if (action === "reports.visibility" && typeof body.hidden !== "boolean") return error("מצב תצוגה אינו תקין");
       const result = action === "reports.delete"
-        ? await database().prepare("DELETE FROM reports WHERE id = ?").bind(id).run()
-        : await database().prepare("UPDATE reports SET hidden = ? WHERE id = ?").bind(body.hidden ? 1 : 0, id).run();
+        ? await database().prepare("DELETE FROM reports WHERE id = ? AND company_id = ?").bind(id, companyId).run()
+        : await database().prepare("UPDATE reports SET hidden = ? WHERE id = ? AND company_id = ?").bind(body.hidden ? 1 : 0, id, companyId).run();
       if (result.meta.changes !== 1) return error("הדוח אינו קיים. רענן את הרשימה", 404);
+      return json({ ok: true });
+    }
+    if (action === "companies.create" || action === "companies.update") {
+      const name = String(body.name || "").trim(), registration = String(body.registration || "").trim();
+      if (!name || name.length > 100 || registration.length > 30) return error("פרטי החברה אינם תקינים");
+      const duplicate = await database().prepare("SELECT id FROM companies WHERE name = ? COLLATE NOCASE AND id != ?").bind(name, action === "companies.update" ? companyId : "").first();
+      if (duplicate) return error("שם החברה כבר קיים", 409);
+      if (action === "companies.update") {
+        if (!await companyAccess(user, companyId)) return error("החברה אינה קיימת", 404);
+        await database().prepare("UPDATE companies SET name = ?, registration = ? WHERE id = ?").bind(name, registration, companyId).run();
+        return json({ ok: true });
+      }
+      const id = crypto.randomUUID();
+      await database().prepare("INSERT INTO companies (id, name, registration, created_at) VALUES (?, ?, ?, ?)").bind(id, name, registration, now()).run();
+      return json({ id }, 201);
+    }
+    if (action === "companies.membership") {
+      const userId = String(body.userId || "");
+      if (!await companyAccess(user, companyId) || typeof body.enabled !== "boolean") return error("פרטי השיוך אינם תקינים");
+      const target = await database().prepare("SELECT id, role FROM users WHERE id = ?").bind(userId).first<{id: string; role: string}>();
+      if (!target || target.role === "admin") return error("מנהלי מערכת מורשים לכל החברות; בחר משתמש רגיל");
+      if (body.enabled) await database().prepare("INSERT OR IGNORE INTO company_members (company_id, user_id) VALUES (?, ?)").bind(companyId, userId).run();
+      else await database().prepare("DELETE FROM company_members WHERE company_id = ? AND user_id = ?").bind(companyId, userId).run();
       return json({ ok: true });
     }
     if (action === "users.create") {

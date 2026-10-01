@@ -37,8 +37,22 @@ export const loginAttempts = sqliteTable("login_attempts", {
   windowStart: integer("window_start").notNull(),
 });
 
+export const companies = sqliteTable("companies", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  registration: text("registration").notNull().default(""),
+  createdAt: integer("created_at").notNull(),
+}, table => [uniqueIndex("idx_companies_name").on(table.name)]);
+
+export const companyMembers = sqliteTable("company_members", {
+  companyId: text("company_id").notNull().references(() => companies.id),
+  userId: text("user_id").notNull().references(() => users.id),
+}, table => [uniqueIndex("idx_company_members_company_user").on(table.companyId, table.userId)]);
+
 export const reports = sqliteTable("reports", {
   id: text("id").primaryKey(),
+  companyId: text("company_id").notNull().references(() => companies.id),
+  moduleKey: text("module_key").notNull().default("pnl"),
   description: text("description").notNull(),
   taxYear: integer("tax_year").notNull(),
   fromMonth: integer("from_month").notNull(),
@@ -48,4 +62,4 @@ export const reports = sqliteTable("reports", {
   hidden: integer("hidden").notNull().default(0),
   createdBy: text("created_by").notNull(),
   updatedAt: integer("updated_at").notNull(),
-}, (table) => [uniqueIndex("idx_reports_period_description").on(table.taxYear, table.fromMonth, table.toMonth, table.description)]);
+}, (table) => [uniqueIndex("idx_reports_company_module_period_description").on(table.companyId, table.moduleKey, table.taxYear, table.fromMonth, table.toMonth, table.description)]);
