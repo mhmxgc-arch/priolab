@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { QRCodeSVG } from "qrcode.react";
 
 type User = { id: string; username: string; role: string; status: string; created_at?: number };
 type Rule = { address: string; created_at: number };
 type Settings = { users: User[]; ipRules: Rule[]; ipEnforced: boolean; currentIp: string | null };
 
 export default function Home() {
-  const [version, setVersion] = useState("2.1.1");
+  const [version, setVersion] = useState("2.1.2");
   const [setup, setSetup] = useState(false);
   const [setupUnavailable, setSetupUnavailable] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -69,7 +70,7 @@ export default function Home() {
       <label>שם משתמש<input autoComplete="username" required value={username} onChange={e => setUsername(e.target.value)} /></label>
       <label>{changeRequired ? "סיסמה ראשונית" : "סיסמה"}<input type="password" autoComplete={setup ? "new-password" : "current-password"} required minLength={setup ? 8 : undefined} value={password} onChange={e => setPassword(e.target.value)} /></label>
       {changeRequired && <div className="password-change"><strong>יש להחליף סיסמה לפני הכניסה</strong><p>לפחות 8 תווים, כולל אות גדולה, אות קטנה, ספרה וסימן מיוחד. לאחר מכן תחבר את Google Authenticator.</p><label>סיסמה חדשה<input type="password" autoComplete="new-password" minLength={8} required value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label><label>אימות סיסמה חדשה<input type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label></div>}
-      {enrollment && <div className="enroll"><strong>חיבור Google Authenticator</strong><p>פתחו את האפליקציה, בחרו הוספת חשבון והזינו את מפתח ההגדרה:</p><code dir="ltr">{enrollment.secret}</code><p className="muted">לאחר מכן הזינו את הקוד בן שש הספרות. שמרו את המפתח במקום בטוח.</p></div>}
+      {enrollment && <div className="enroll"><strong>חיבור Google Authenticator</strong><p>פתחו את Google Authenticator, לחצו על + ובחרו ״סריקת קוד QR״. סרקו את הקוד הבא:</p><div className="enrollment-qr"><QRCodeSVG value={enrollment.uri} size={224} level="M" marginSize={4} title="קוד QR לחיבור Google Authenticator" /></div><p className="muted">לאחר הסריקה הזינו למטה את הקוד בן שש הספרות שמופיע באפליקציה כדי לסיים את החיבור.</p></div>}
       {!setup && !changeRequired && (otpRequired || enrollment) && <label>קוד Google Authenticator<input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" placeholder="000000" required value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ""))} /></label>}
       {notice && <div className="notice" role="alert">{notice}</div>}
       <button disabled={busy} className="primary">{busy ? "מאמת…" : setup ? "יצירת מנהל ראשי" : changeRequired ? "החלפת סיסמה והמשך" : enrollment ? "סיום הגדרה וכניסה" : "כניסה למערכת"}</button>

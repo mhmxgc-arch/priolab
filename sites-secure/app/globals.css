@@ -17,3 +17,5 @@
 .list-row button,.form-line button:not(.primary),.enforce button{color:#055b9b;border-color:#c6dce9}
 @media(max-width:520px){.login-logo{width:min(100%,260px)}.header-logo{width:76px;height:42px}.topbar{height:72px}.report-frame{height:calc(100vh - 72px)}}
 .password-change{display:grid;gap:14px;padding:16px;border:1px solid #c9dfee;background:#f1f7fb;border-radius:10px}.password-change p{font-size:14px;line-height:1.5;color:#526c81;margin:0}
+
+.enroll{font-size:14px}.enrollment-qr{display:flex;justify-content:center;margin:16px 0}.enrollment-qr svg{display:block;width:224px;max-width:100%;height:auto;background:#fff;border-radius:8px}.enroll .muted{margin:0;font-size:14px;line-height:1.6}

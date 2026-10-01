@@ -47,6 +47,6 @@ unset PRIOLAB_ADMIN_PASSWORD
 
 Then open the site and log in as `admin` with the temporary password. The first
 login requires a different complex password (8 or more characters, with an
-uppercase letter, lowercase letter, digit and symbol). Add the displayed
-setup key in Google Authenticator and enter its six-digit code to finish.
+uppercase letter, lowercase letter, digit and symbol). In Google Authenticator, choose + and scan the displayed QR code, then enter
+its six-digit code to finish.
 Further users are created from the admin screen.
